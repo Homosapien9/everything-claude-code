@@ -2,8 +2,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const assert = require('assert');
 const { INLINE_RESOLVE } = require('../../scripts/lib/resolve-ecc-root');
+
+// Sentinel ECC skill that resolveEccRoot() requires alongside the script tree
+// before accepting a root; kept in sync with the module's DEFAULT_SKILL_PROBE.
+const ECC_SKILL_SENTINEL = path.join('skills', 'continuous-learning-v2');
 
 let passed = 0;
 let failed = 0;
@@ -26,23 +31,17 @@ const instinctStatusDoc = fs.readFileSync(path.join(__dirname, '..', '..', 'comm
 
 test('sessions command uses shared inline resolver in all node scripts', () => {
   assert.strictEqual((sessionsDoc.match(/const _r = /g) || []).length, 6);
-  assert.strictEqual((sessionsDoc.match(/\['marketplaces','ecc'\]/g) || []).length, 6);
-  assert.strictEqual((sessionsDoc.match(/\['marketplaces','everything-claude-code'\]/g) || []).length, 6);
-  assert.strictEqual((sessionsDoc.match(/\['ecc','everything-claude-code'\]/g) || []).length, 6);
+  assert.strictEqual((sessionsDoc.match(/scripts','lib','resolve-ecc-root/g) || []).length, 6);
 });
 
 test('skill-health command uses shared inline resolver in all shell snippets', () => {
-  assert.strictEqual((skillHealthDoc.match(/var r=/g) || []).length, 3);
-  assert.strictEqual((skillHealthDoc.match(/\['marketplaces','ecc'\]/g) || []).length, 3);
-  assert.strictEqual((skillHealthDoc.match(/\['marketplaces','everything-claude-code'\]/g) || []).length, 3);
-  assert.strictEqual((skillHealthDoc.match(/\['ecc','everything-claude-code'\]/g) || []).length, 3);
+  assert.strictEqual((skillHealthDoc.match(/var r=\(function/g) || []).length, 3);
+  assert.strictEqual((skillHealthDoc.match(/scripts','lib','resolve-ecc-root/g) || []).length, 3);
 });
 
 test('instinct-status command uses shared inline resolver (no stale legacy fallback) (#2037)', () => {
-  assert.strictEqual((instinctStatusDoc.match(/var r=/g) || []).length, 1);
-  assert.strictEqual((instinctStatusDoc.match(/\['marketplaces','ecc'\]/g) || []).length, 1);
-  assert.strictEqual((instinctStatusDoc.match(/\['marketplaces','everything-claude-code'\]/g) || []).length, 1);
-  assert.strictEqual((instinctStatusDoc.match(/\['ecc','everything-claude-code'\]/g) || []).length, 1);
+  assert.strictEqual((instinctStatusDoc.match(/var r=\(function/g) || []).length, 1);
+  assert.strictEqual((instinctStatusDoc.match(/scripts','lib','resolve-ecc-root/g) || []).length, 1);
   // The pre-fix template hard-coded the legacy path as a fallback when
   // CLAUDE_PLUGIN_ROOT was unset. Asserting its absence prevents regression.
   assert.ok(
@@ -51,10 +50,34 @@ test('instinct-status command uses shared inline resolver (no stale legacy fallb
   );
 });
 
-test('inline resolver covers current and legacy marketplace plugin roots', () => {
-  assert.ok(INLINE_RESOLVE.includes("'marketplaces','ecc'"));
-  assert.ok(INLINE_RESOLVE.includes("'marketplaces','everything-claude-code'"));
+test('resolveEccRoot module covers current and legacy marketplace plugin roots', () => {
+  const { resolveEccRoot } = require('../../scripts/lib/resolve-ecc-root');
+  assert.ok(typeof resolveEccRoot === 'function');
+
+  const legacyHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-marketplace-legacy-'));
+  try {
+    const legacyRoot = path.join(legacyHomeDir, '.claude', 'plugins', 'marketplaces', 'ecc');
+    fs.mkdirSync(path.join(legacyRoot, 'scripts', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(legacyRoot, 'scripts', 'lib', 'utils.js'), '// stub');
+    fs.mkdirSync(path.join(legacyRoot, ECC_SKILL_SENTINEL), { recursive: true });
+    assert.strictEqual(resolveEccRoot({ envRoot: '', homeDir: legacyHomeDir }), legacyRoot);
+  } finally {
+    fs.rmSync(legacyHomeDir, { recursive: true, force: true });
+  }
+
+  const cacheHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-marketplace-cache-'));
+  try {
+    const cacheRoot = path.join(cacheHomeDir, '.claude', 'plugins', 'cache', 'ecc', 'affaan-m', '1.0.0');
+    fs.mkdirSync(path.join(cacheRoot, 'scripts', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(cacheRoot, 'scripts', 'lib', 'utils.js'), '// stub');
+    fs.mkdirSync(path.join(cacheRoot, ECC_SKILL_SENTINEL), { recursive: true });
+    assert.strictEqual(resolveEccRoot({ envRoot: '', homeDir: cacheHomeDir }), cacheRoot);
+  } finally {
+    fs.rmSync(cacheHomeDir, { recursive: true, force: true });
+  }
+
   assert.ok(!INLINE_RESOLVE.includes('\\"'), 'Inline resolver should not require escaped double quotes');
+  assert.ok(INLINE_RESOLVE.includes("scripts','lib','resolve-ecc-root"));
 });
 
 console.log(`Passed: ${passed}`);
